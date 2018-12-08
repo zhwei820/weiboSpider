@@ -2,6 +2,7 @@
 # -*- coding: UTF-8 -*-
 
 import os
+import time
 import re
 import requests
 import sys
@@ -9,10 +10,22 @@ import traceback
 from datetime import datetime
 from datetime import timedelta
 from lxml import etree
-
+import http.client
+http.client._is_legal_header_name = re.compile(rb'[^\s][^\r\n]*').fullmatch
 
 class Weibo:
-    cookie = {"Cookie": "your cookie"}  # 将your cookie替换成自己的cookie
+    cookie = {}  # 将your cookie替换成自己的cookie
+    headers2 = {
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7',
+        'Connection': 'keep-alive',
+        'Cookie': '',
+        'Host': 'weibo.cn',
+        'Upgrade-Insecure-Requests': '1',
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/70.0.3538.77 Chrome/70.0.3538.77 Safari/537.36',
+
+    }
 
     # Weibo类初始化
     def __init__(self, user_id, filter=0):
@@ -35,9 +48,9 @@ class Weibo:
     def get_username(self):
         try:
             url = "https://weibo.cn/%d/info" % (self.user_id)
-            html = requests.get(url, cookies=self.cookie).content
+            html = requests.get(url, headers=self.headers2, cookies=self.cookie).content
             selector = etree.HTML(html)
-            username = selector.xpath("//title/text()")[0]
+            username = selector.xpath("/html/head/title")[0].text
             self.username = username[:-3]
             print(u"用户名: " + self.username)
         except Exception as e:
@@ -49,7 +62,7 @@ class Weibo:
         try:
             url = "https://weibo.cn/u/%d?filter=%d&page=1" % (
                 self.user_id, self.filter)
-            html = requests.get(url, cookies=self.cookie).content
+            html = requests.get(url, headers=self.headers2, cookies=self.cookie).content
             selector = etree.HTML(html)
             pattern = r"\d+\.?\d*"
 
@@ -120,7 +133,7 @@ class Weibo:
         try:
             url = "https://weibo.cn/u/%d?filter=%d&page=1" % (
                 self.user_id, self.filter)
-            html = requests.get(url, cookies=self.cookie).content
+            html = requests.get(url, headers=self.headers2, cookies=self.cookie).content
             selector = etree.HTML(html)
             if selector.xpath("//input[@name='mp']") == []:
                 page_num = 1
@@ -131,7 +144,11 @@ class Weibo:
             for page in range(1, page_num + 1):
                 url2 = "https://weibo.cn/u/%d?filter=%d&page=%d" % (
                     self.user_id, self.filter, page)
-                html2 = requests.get(url2, cookies=self.cookie).content
+                if page ==1:
+                    html2 = html
+                else:
+                    html2 = requests.get(url2, headers=self.headers2, cookies=self.cookie).content
+                    time.sleep(0.1)
                 selector2 = etree.HTML(html2)
                 info = selector2.xpath("//div[@class='c']")
                 is_empty = info[0].xpath("div/span[@class='ctt']")
@@ -200,15 +217,15 @@ class Weibo:
                                 "%Y-%m-%d %H:%M")
                         elif u"今天" in publish_time:
                             today = datetime.now().strftime("%Y-%m-%d")
-                            time = publish_time[3:]
-                            publish_time = today + " " + time
+                            _time = publish_time[3:]
+                            publish_time = today + " " + _time
                         elif u"月" in publish_time:
                             year = datetime.now().strftime("%Y")
                             month = publish_time[0:2]
                             day = publish_time[3:5]
-                            time = publish_time[7:12]
+                            _time = publish_time[7:12]
                             publish_time = (
-                                year + "-" + month + "-" + day + " " + time)
+                                    year + "-" + month + "-" + day + " " + _time)
                         else:
                             publish_time = publish_time[:16]
                         self.publish_time.append(publish_time)
@@ -312,7 +329,7 @@ class Weibo:
 def main():
     try:
         # 使用实例,输入一个用户id，所有信息都会存储在wb实例中
-        user_id = 1476938315  # 可以改成任意合法的用户id（爬虫的微博id除外）
+        user_id = 6069373517  # 可以改成任意合法的用户id（爬虫的微博id除外）
         filter = 1  # 值为0表示爬取全部微博（原创微博+转发微博），值为1表示只爬取原创微博
         wb = Weibo(user_id, filter)	 # 调用Weibo类，创建微博实例wb
         wb.start()  # 爬取微博信息
