@@ -11,21 +11,14 @@ from datetime import datetime
 from datetime import timedelta
 from lxml import etree
 import http.client
+from header import headers2
+
+
 http.client._is_legal_header_name = re.compile(rb'[^\s][^\r\n]*').fullmatch
 
 class Weibo:
-    cookie = {}  # 将your cookie替换成自己的cookie
-    headers2 = {
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7',
-        'Connection': 'keep-alive',
-        'Cookie': '',
-        'Host': 'weibo.cn',
-        'Upgrade-Insecure-Requests': '1',
-        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/70.0.3538.77 Chrome/70.0.3538.77 Safari/537.36',
-
-    }
+    cookie = {}
+    headers2 = headers2
 
     # Weibo类初始化
     def __init__(self, user_id, filter=0):
@@ -37,6 +30,7 @@ class Weibo:
         self.following = 0  # 用户关注数
         self.followers = 0  # 用户粉丝数
         self.weibo_content = []	 # 微博内容
+        self.is_retweet = []	 # 是否转发
         self.weibo_place = []  # 微博位置
         self.publish_time = []  # 微博发布时间
         self.up_num = []  # 微博对应的点赞数
@@ -128,8 +122,46 @@ class Weibo:
             print("Error: ", e)
             traceback.print_exc()
 
+    def get_pub_time(self, str_time, time_interval, flag):
+        # 微博发布时间
+        publish_time = str_time.split(u'来自')[0]
+        if u"刚刚" in publish_time:
+            publish_time = datetime.now().strftime(
+                '%Y-%m-%d %H:%M')
+        elif u"分钟" in publish_time:
+            minute = publish_time[:publish_time.find(u"分钟")]
+            minute = timedelta(minutes=int(minute))
+            publish_time = (
+                datetime.now() - minute).strftime(
+                "%Y-%m-%d %H:%M")
+        elif u"今天" in publish_time:
+            today = datetime.now().strftime("%Y-%m-%d")
+            _time = publish_time[3:]
+            publish_time = today + " " + _time
+        elif u"月" in publish_time:
+            year = datetime.now().strftime("%Y")
+            month = publish_time[0:2]
+            day = publish_time[3:5]
+            _time = publish_time[7:12]
+            publish_time = (
+                year + "-" + month + "-" + day + " " + _time)
+        else:
+            publish_time = publish_time[:16]
+
+        if publish_time < time_interval[0]:
+            if flag:  # 处理置顶微博
+                raise Exception('break')  # 结束
+            flag += 1
+        if publish_time > time_interval[1]:
+            return False
+
+        self.publish_time.append(publish_time)
+        print(u"微博发布时间: " + publish_time)
+        return True
+
     # 获取用户微博内容及对应的发布时间、点赞数、转发数、评论数
-    def get_weibo_info(self):
+    def get_weibo_info(self, time_interval):
+        flag = 0
         try:
             url = "https://weibo.cn/u/%d?filter=%d&page=1" % (
                 self.user_id, self.filter)
@@ -154,15 +186,22 @@ class Weibo:
                 is_empty = info[0].xpath("div/span[@class='ctt']")
                 if is_empty:
                     for i in range(0, len(info) - 2):
+                        str_time = info[i].xpath("div/span[@class='ct']")
+                        str_time = str_time[0].xpath("string(.)").\
+                            encode(sys.stdout.encoding, "ignore").\
+                            decode(sys.stdout.encoding)
+
+                        # 微博发布时间
+                        if not self.get_pub_time(str_time, time_interval, flag):
+                            continue  # 无效数据
+
                         # 微博内容
                         str_t = info[i].xpath("div/span[@class='ctt']")
                         weibo_content = str_t[0].xpath("string(.)").replace(u"\u200b", "").encode(
-                            sys.stdout.encoding, "ignore").decode(
-                            sys.stdout.encoding)
+                            sys.stdout.encoding, "ignore").decode(sys.stdout.encoding)
                         weibo_content = weibo_content[:-1]
                         weibo_id = info[i].xpath("@id")[0][2:]
-                        a_link = info[i].xpath(
-                            "div/span[@class='ctt']/a")
+                        a_link = info[i].xpath("div/span[@class='ctt']/a")
                         is_retweet = info[i].xpath("div/span[@class='cmt']")
                         if a_link:
                             if a_link[-1].xpath("text()")[0] == u"全文":
@@ -173,10 +212,11 @@ class Weibo:
                                         wb_content = wb_content[1:]
                                     weibo_content = wb_content
                         if is_retweet:
-                            weibo_content = self.get_retweet(
-                                is_retweet, info[i], weibo_content)
+                            weibo_content = self.get_retweet(is_retweet, info[i], weibo_content)
                         self.weibo_content.append(weibo_content)
+                        self.is_retweet.append(is_retweet)
                         print(weibo_content)
+
 
                         # 微博位置
                         div_first = info[i].xpath("div")[0]
@@ -200,36 +240,6 @@ class Weibo:
                         self.weibo_place.append(weibo_place)
                         print(u"微博位置: " + weibo_place)
 
-                        # 微博发布时间
-                        str_time = info[i].xpath("div/span[@class='ct']")
-                        str_time = str_time[0].xpath("string(.)").encode(
-                            sys.stdout.encoding, "ignore").decode(
-                            sys.stdout.encoding)
-                        publish_time = str_time.split(u'来自')[0]
-                        if u"刚刚" in publish_time:
-                            publish_time = datetime.now().strftime(
-                                '%Y-%m-%d %H:%M')
-                        elif u"分钟" in publish_time:
-                            minute = publish_time[:publish_time.find(u"分钟")]
-                            minute = timedelta(minutes=int(minute))
-                            publish_time = (
-                                datetime.now() - minute).strftime(
-                                "%Y-%m-%d %H:%M")
-                        elif u"今天" in publish_time:
-                            today = datetime.now().strftime("%Y-%m-%d")
-                            _time = publish_time[3:]
-                            publish_time = today + " " + _time
-                        elif u"月" in publish_time:
-                            year = datetime.now().strftime("%Y")
-                            month = publish_time[0:2]
-                            day = publish_time[3:5]
-                            _time = publish_time[7:12]
-                            publish_time = (
-                                    year + "-" + month + "-" + day + " " + _time)
-                        else:
-                            publish_time = publish_time[:16]
-                        self.publish_time.append(publish_time)
-                        print(u"微博发布时间: " + publish_time)
 
                         # 微博发布工具
                         if len(str_time.split(u'来自')) > 1:
@@ -259,8 +269,7 @@ class Weibo:
                         comment_num = int(guid[2])
                         self.comment_num.append(comment_num)
                         print(u"评论数: " + str(comment_num))
-                        print(
-                            "===========================================================================")
+                        print("===========================================================================")
 
                         self.weibo_num2 += 1
 
@@ -274,37 +283,45 @@ class Weibo:
             print("Error: ", e)
             traceback.print_exc()
 
+    # 发博时间
+    # 原创
+    # 转发
+    # 转
+    # 评
+    # 赞
+
+    # text = (str(i) + ":" + self.weibo_content[i] + "\n" +
+    #         u"微博位置: " + self.weibo_place[i] + "\n" +
+    #         u"发布时间: " + self.publish_time[i] + "\n" +
+    #         u"点赞数: " + str(self.up_num[i]) +
+    #         u"	 转发数: " + str(self.retweet_num[i]) +
+    #         u"	 评论数: " + str(self.comment_num[i]) + "\n" +
+    #         u"发布工具: " + self.publish_tool[i] + "\n\n"
+    #         )
+    # result = result + text
+
+    # result = (u"用户信息\n用户昵称：" + self.username +
+    #           u"\n用户id: " + str(self.user_id) +
+    #           u"\n微博数: " + str(self.weibo_num) +
+    #           u"\n关注数: " + str(self.following) +
+    #           u"\n粉丝数: " + str(self.followers) +
+    #           result_header
+    #           )
+
     # 将爬取的信息写入文件
     def write_txt(self):
         try:
-            if self.filter:
-                result_header = u"\n\n原创微博内容: \n"
-            else:
-                result_header = u"\n\n微博内容: \n"
-            result = (u"用户信息\n用户昵称：" + self.username +
-                      u"\n用户id: " + str(self.user_id) +
-                      u"\n微博数: " + str(self.weibo_num) +
-                      u"\n关注数: " + str(self.following) +
-                      u"\n粉丝数: " + str(self.followers) +
-                      result_header
-                      )
-            for i in range(1, self.weibo_num2 + 1):
-                text = (str(i) + ":" + self.weibo_content[i - 1] + "\n" +
-                        u"微博位置: " + self.weibo_place[i - 1] + "\n" +
-                        u"发布时间: " + self.publish_time[i - 1] + "\n" +
-                        u"点赞数: " + str(self.up_num[i - 1]) +
-                        u"	 转发数: " + str(self.retweet_num[i - 1]) +
-                        u"	 评论数: " + str(self.comment_num[i - 1]) + "\n" +
-                        u"发布工具: " + self.publish_tool[i - 1] + "\n\n"
-                        )
-                result = result + text
-            file_dir = os.path.split(os.path.realpath(__file__))[
-                0] + os.sep + "weibo"
+            csv = '''发博时间, 原创, 转发, 转, 评, 赞,\n'''
+            for i in range(0, self.weibo_num2):
+                is_original, is_forward = ('否', '是') if self.is_retweet[i] else ('是', '否')
+                csv += '%s, %s, %s, %s, %s, %s\n' % (self.publish_time[i], is_original, is_forward, self.retweet_num[i], self.comment_num[i], self.up_num[i])
+
+            file_dir = os.path.split(os.path.realpath(__file__))[0] + os.sep + "weibo"
             if not os.path.isdir(file_dir):
                 os.mkdir(file_dir)
-            file_path = file_dir + os.sep + "%d" % self.user_id + ".txt"
+            file_path = file_dir + os.sep + "%s" % self.username + ".csv"
             f = open(file_path, "wb")
-            f.write(result.encode(sys.stdout.encoding))
+            f.write(csv.encode(sys.stdout.encoding))
             f.close()
             print(u"微博写入文件完毕，保存路径:")
             print(file_path)
@@ -317,7 +334,7 @@ class Weibo:
         try:
             self.get_username()
             self.get_user_info()
-            self.get_weibo_info()
+            self.get_weibo_info(['2018-11-11 00:00', '2018-12-11 00:00'])
             self.write_txt()
             print(u"信息抓取完毕")
             print(
@@ -329,22 +346,14 @@ class Weibo:
 def main():
     try:
         # 使用实例,输入一个用户id，所有信息都会存储在wb实例中
-        user_id = 6069373517  # 可以改成任意合法的用户id（爬虫的微博id除外）
-        filter = 1  # 值为0表示爬取全部微博（原创微博+转发微博），值为1表示只爬取原创微博
+        user_id = 2559971200  # 可以改成任意合法的用户id（爬虫的微博id除外）
+        filter = 0  # 值为0表示爬取全部微博（原创微博+转发微博），值为1表示只爬取原创微博
         wb = Weibo(user_id, filter)	 # 调用Weibo类，创建微博实例wb
         wb.start()  # 爬取微博信息
         print(u"用户名: " + wb.username)
         print(u"全部微博数: " + str(wb.weibo_num))
         print(u"关注数: " + str(wb.following))
         print(u"粉丝数: " + str(wb.followers))
-        if wb.weibo_content:
-            print(u"最新/置顶 微博为: " + wb.weibo_content[0])
-            print(u"最新/置顶 微博位置: " + wb.weibo_place[0])
-            print(u"最新/置顶 微博发布时间: " + wb.publish_time[0])
-            print(u"最新/置顶 微博获得赞数: " + str(wb.up_num[0]))
-            print(u"最新/置顶 微博获得转发数: " + str(wb.retweet_num[0]))
-            print(u"最新/置顶 微博获得评论数: " + str(wb.comment_num[0]))
-            print(u"最新/置顶 微博发布工具: " + wb.publish_tool[0])
     except Exception as e:
         print("Error: ", e)
         traceback.print_exc()
