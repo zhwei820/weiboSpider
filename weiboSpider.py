@@ -37,6 +37,7 @@ class Weibo:
         self.retweet_num = []  # 微博对应的转发数
         self.comment_num = []  # 微博对应的评论数
         self.publish_tool = []  # 微博发布工具
+        self.raw_content = []  # 原始数据
 
     # 获取用户昵称
     def get_username(self):
